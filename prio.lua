@@ -3,5 +3,6 @@ getgenv().PRIORITY = {
   "Meta Technetta",
   "Noobini Infeeny",
   "Magmew",
-  "Don Magmito"
+  "Don Magmito",
+  "Doomini Tiktookini"
 }
