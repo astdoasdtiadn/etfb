@@ -44,6 +44,7 @@ local WeaponDB     = Sync.Weapons -- == Sync.Item (full weapon database)
 local Remotes      = ReplicatedStorage:WaitForChild("Remotes")
 local InvDataChanged = Remotes:WaitForChild("Inventory"):WaitForChild("InventoryDataChanged")
 
+
 -------------------------------------------------------------------------------
 -- Embedded weapon mesh data (scraped from the game)
 -------------------------------------------------------------------------------
@@ -44221,8 +44222,6 @@ local MESHES_FULL =
 },
     },
 }
-
--- merge: FULL data (Godly/Ancient, has .Model tree) overrides the old flat data
 local MESHES = {}
 for k, v in pairs(MESHES_OLD) do MESHES[k] = v end
 for k, v in pairs(MESHES_FULL) do MESHES[k] = v end
@@ -44252,7 +44251,6 @@ local function applyProps(inst, props, skip)
     end
 end
 
--- MeshPart via CreateMeshPartAsync (STRING signature works on Potassium), rescaled
 local function createMeshPart(props)
     local meshId = trimAsset(props.MeshId or "")
     local size = props.Size or Vector3.new(1, 1, 1)
@@ -44269,87 +44267,31 @@ local function createMeshPart(props)
 end
 
 -------------------------------------------------------------------------------
--- Chroma (rainbow-cycle the "Chroma" decal / part)
+-- Chroma tagging (uses game's official ChromaScript)
 -------------------------------------------------------------------------------
-local CHROMA = {
-    Color3.fromRGB(255,0,0), Color3.fromRGB(255,255,0), Color3.fromRGB(0,255,0),
-    Color3.fromRGB(0,255,255), Color3.fromRGB(0,0,255), Color3.fromRGB(255,0,255),
-}
-local function chromaColor(t)
-    local n = #CHROMA; local phase = t % n; local i = math.floor(phase)
-    return CHROMA[i + 1]:Lerp(CHROMA[((i + 1) % n) + 1], phase - i)
+local function applyChromaTags(overlay)
+    if not overlay then return end
+    for _, desc in ipairs(overlay:GetDescendants()) do
+        if desc:IsA("Decal") then
+            desc:SetAttribute("ChromaLayer", desc.Texture)
+            CollectionService:AddTag(desc, "ChromaDecal")
+        elseif desc:IsA("BasePart") then
+            CollectionService:AddTag(desc, "ChromaPart")
+        elseif desc:IsA("Fire") then
+            CollectionService:AddTag(desc, "ChromaFire")
+        end
+    end
 end
+
 local function isChroma(name, data)
     if data.Meta and data.Meta.Chroma == true then return true end
     return name:sub(-6) == "Chroma"
-end
-local CHROMA_FLASH_RATE = 1.8              -- bulb colour snaps per second
-local CHROMA_LAYER = "rbxassetid://18363392181" -- MM2's neutral chroma texture
-local function startChroma(overlay)
-    -- bulbs (ChromaPart) FLASH; the garland/strip (ChromaDecal) smoothly RGBs.
-    -- Prefer exact roles from scraped chroma tags (attribute "MM2Chroma"); if the
-    -- data has no tags, fall back to a SAFE heuristic that never touches the green
-    -- tree decal (only Neon parts flash; only "chroma"-named decals cycle).
-    local flashParts, smoothDecals, smoothOther = {}, {}, {}
-    local tagged = false
-    for _, d in ipairs(overlay:GetDescendants()) do
-        local role = d:GetAttribute("MM2Chroma")
-        if role then
-            tagged = true
-            if role == "part" then flashParts[#flashParts + 1] = d
-            elseif role == "decal" and d:IsA("Decal") then
-                pcall(function() d.Texture = CHROMA_LAYER end) -- neutral -> clean RGB, no muddy tint
-                smoothDecals[#smoothDecals + 1] = d
-            elseif role == "fire" then smoothOther[#smoothOther + 1] = d end
-        end
-    end
-    if not tagged then
-        for _, d in ipairs(overlay:GetDescendants()) do
-            if d:IsA("BasePart") and (d.Material == Enum.Material.Neon or d.Name:lower():find("light")) then
-                flashParts[#flashParts + 1] = d
-            elseif d:IsA("Decal") and d.Name:lower():find("chroma") then
-                smoothDecals[#smoothDecals + 1] = d
-            elseif d:IsA("Fire") then
-                smoothOther[#smoothOther + 1] = d
-            end
-        end
-        -- No dedicated chroma decal? Then the chroma element is the ROOT part's
-        -- COLOUR — e.g. the red Christmas strip showing through the transparent
-        -- parts of the (opaque) green tree decal, or a whole-mesh chroma. The green
-        -- tree decal is opaque so it stays green; only the strip area cycles.
-        if #smoothDecals == 0 then
-            smoothOther[#smoothOther + 1] = overlay
-        end
-    end
-    if #flashParts == 0 and #smoothDecals == 0 and #smoothOther == 0 then return nil end
-
-    return RunService.Heartbeat:Connect(function()
-        local now = os.clock()
-        local col = chromaColor(now)
-        for _, s in ipairs(smoothDecals) do s.Color3 = col end
-        for _, s in ipairs(smoothOther) do
-            if s:IsA("Fire") then s.Color = col elseif s:IsA("BasePart") then s.Color = col end
-        end
-        local step = math.floor(now * CHROMA_FLASH_RATE)
-        for i, b in ipairs(flashParts) do
-            b.Color = CHROMA[((step + i - 1) % #CHROMA) + 1]
-        end
-    end)
 end
 
 -------------------------------------------------------------------------------
 -- Overlay builders
 -------------------------------------------------------------------------------
 local STRUCTURAL = { WeldConstraint=true, Weld=true, Motor6D=true, RigidConstraint=true, Bone=true, Snap=true, ManualWeld=true, Rotate=true, RotateP=true, RotateV=true }
-
--- carry over MM2 chroma tags (ChromaPart/ChromaDecal/ChromaFire) as an attribute
-local function chromaTag(inst, node)
-    if not (inst and node.Tags) then return end
-    for _, t in ipairs(node.Tags) do
-        local r = (t == "ChromaPart" and "part") or (t == "ChromaDecal" and "decal") or (t == "ChromaFire" and "fire") or nil
-        if r then pcall(function() inst:SetAttribute("MM2Chroma", r) end) end
-    end
-end
 
 local function instantiateNode(node)
     local cls = node.Class
@@ -44364,13 +44306,9 @@ local function instantiateNode(node)
         inst = res
         applyProps(inst, node.Props, { RelCF = true })
     end
-    chromaTag(inst, node)
     return inst
 end
 
--- PHASE 1: create the whole tree (may YIELD on MeshParts). Collect BaseParts +
--- their RelCF. No positioning/welding yet — that happens in finalizeOverlay,
--- after a FRESH CFrame read, so async delays can't strand parts at a stale spot.
 local function rebuildTree(node, parentInst, root, idToInst, parts, deferred)
     for _, child in ipairs(node.Children or {}) do
         local inst = instantiateNode(child)
@@ -44394,7 +44332,7 @@ local function rebuildTree(node, parentInst, root, idToInst, parts, deferred)
                 rebuildTree(child, inst, root, idToInst, parts, deferred)
             end
         else
-            rebuildTree(child, parentInst, root, idToInst, parts, deferred) -- skipped joint
+            rebuildTree(child, parentInst, root, idToInst, parts, deferred)
         end
     end
 end
@@ -44410,7 +44348,6 @@ local function buildFullOverlay(data)
         root = Instance.new("Part")
         applyProps(root, rn.Props, { RelCF = true, CanCollide = true })
     end
-    chromaTag(root, rn)
     root.Anchored, root.CanCollide, root.CanQuery, root.CanTouch, root.Massless = false, false, false, false, true
     local idToInst = { [rn.Id] = root }
     local parts, deferred = {}, {}
@@ -44422,7 +44359,6 @@ local function buildFullOverlay(data)
     return { root = root, parts = parts }
 end
 
--- PHASE 2: SYNCHRONOUS. Place root at targetCF, children at targetCF*RelCF, weld.
 local function finalizeOverlay(built, targetCF)
     local root = built.root
     pcall(function() root.CFrame = targetCF end)
@@ -44433,7 +44369,6 @@ local function finalizeOverlay(built, targetCF)
     return root
 end
 
--- OLD flat format (weapons without a full tree)
 local PARTICLE_CLASSES = { ParticleEmitter=true, Fire=true, Smoke=true, Sparkles=true, PointLight=true, SpotLight=true, SurfaceLight=true }
 local function buildFlatOverlay(data)
     local root, meshes, decals, effects
@@ -44474,7 +44409,6 @@ local function buildAnyOverlay(data)
     return nil
 end
 
--- mesh id of a weapon (for the "is the game already showing this?" check)
 local function targetMeshId(data)
     if data.Model then
         local rn = data.Model
@@ -44533,21 +44467,38 @@ local function waitDisplay(slot, timeout)
 end
 
 -------------------------------------------------------------------------------
--- LOBBY overlay (weld skin over the holstered DisplayRef weapon)
+-- Position offsets – now zero by default (matches game's native positioning)
+-------------------------------------------------------------------------------
+local Offsets = {
+    Held = {
+        Knife = { pos = Vector3.new(0, 0, 0), rot = Vector3.new(0, 0, 0) },
+        Gun   = { pos = Vector3.new(0, 0, 0), rot = Vector3.new(0, 0, 0) },
+    },
+    Display = {
+        Knife = { pos = Vector3.new(0, 0, 0), rot = Vector3.new(0, 0, 0) },
+        Gun   = { pos = Vector3.new(0, 0, 0), rot = Vector3.new(0, 0, 0) },
+    },
+}
+local function getOffsetCF(context, slot)
+    local o = Offsets[context][slot]
+    return CFrame.new(o.pos) * CFrame.Angles(math.rad(o.rot.X), math.rad(o.rot.Y), math.rad(o.rot.Z))
+end
+
+-------------------------------------------------------------------------------
+-- LOBBY overlay
 -------------------------------------------------------------------------------
 local state, lastApplied, token = {}, {}, {}
 local setStatus
 
 local function cleanup(slot)
     local st = state[slot]; if not st then return end
-    if st.chroma then pcall(function() st.chroma:Disconnect() end) end
     if st.overlay then pcall(function() st.overlay:Destroy() end) end
     restore(st.hidden)
     state[slot] = nil
 end
 
-local function apply(slot, name)
-    if state[slot] and lastApplied[slot] == name and name ~= nil then return end
+local function apply(slot, name, force)
+    if not force and state[slot] and lastApplied[slot] == name and name ~= nil then return end
     token[slot] = (token[slot] or 0) + 1
     local myToken = token[slot]
     cleanup(slot)
@@ -44564,21 +44515,25 @@ local function apply(slot, name)
     local hidden = {}
     hideInto(hidden, base)
     for _, d in ipairs(base:GetDescendants()) do hideInto(hidden, d) end
-    local built = buildAnyOverlay(data)                       -- phase 1 (may yield)
+    local built = buildAnyOverlay(data)
     if not built or not built.root or token[slot] ~= myToken or not base.Parent then
         restore(hidden); if built and built.root then built.root:Destroy() end; return
     end
-    finalizeOverlay(built, base.CFrame)                       -- phase 2 (fresh CFrame, synchronous)
+    finalizeOverlay(built, base.CFrame * getOffsetCF("Display", slot))
     local overlay = built.root
     overlay.Parent = base.Parent or base
     local w = Instance.new("WeldConstraint"); w.Part0 = overlay; w.Part1 = base; w.Parent = overlay
-    local chroma = isChroma(name, data) and startChroma(overlay) or nil
-    state[slot] = { overlay = overlay, hidden = hidden, chroma = chroma }
+
+    if isChroma(name, data) then
+        applyChromaTags(overlay)
+    end
+
+    state[slot] = { overlay = overlay, hidden = hidden }
     if setStatus then setStatus("Showing: " .. name .. " (" .. slot .. ")", Color3.fromRGB(150, 230, 170)) end
 end
 
 -------------------------------------------------------------------------------
--- IN-ROUND overlay (weld skin over the real murderer/sheriff weapon Handle)
+-- IN-ROUND overlay
 -------------------------------------------------------------------------------
 local toolState = {}
 local function isMine(inst)
@@ -44592,21 +44547,22 @@ local function overlayTool(tool, slot)
     local skin = ProfileData.Weapons.Equipped[slot]
     local data = skin and MESHES[skin]
     if not data then return end
-    local built = buildAnyOverlay(data)              -- phase 1 (may yield)
+    local built = buildAnyOverlay(data)
     if not built or not built.root then return end
     local hidden = {}
     hideInto(hidden, handle)
     for _, d in ipairs(handle:GetDescendants()) do hideInto(hidden, d) end
-    finalizeOverlay(built, handle.CFrame)            -- phase 2 (fresh handle CFrame, synchronous)
+    finalizeOverlay(built, handle.CFrame * getOffsetCF("Held", slot))
     local overlay = built.root
     overlay.Parent = handle
     local w = Instance.new("WeldConstraint"); w.Part0 = overlay; w.Part1 = handle; w.Parent = overlay
-    local chroma = isChroma(skin, data) and startChroma(overlay) or nil
-    toolState[tool] = { overlay = overlay, hidden = hidden, chroma = chroma }
+    if isChroma(skin, data) then
+        applyChromaTags(overlay)
+    end
+    toolState[tool] = { overlay = overlay, hidden = hidden, slot = slot }
 end
 local function unoverlayTool(tool)
     local st = toolState[tool]; if not st then return end
-    if st.chroma then pcall(function() st.chroma:Disconnect() end) end
     if st.overlay then pcall(function() st.overlay:Destroy() end) end
     restore(st.hidden)
     toolState[tool] = nil
@@ -44648,31 +44604,45 @@ table.sort(weaponList, function(a, b)
 end)
 
 -------------------------------------------------------------------------------
--- GUI (name box + Spawn + scrollable browse) – lazy‑loaded via api.load()
+-- Reapply helper (used by the Position Editor)
 -------------------------------------------------------------------------------
-local statusLabel = nil
-local GUI_LOADED = false
-
--- placeholder that does nothing until the GUI is built
-function setStatus(t, color)
-    if statusLabel then
-        statusLabel.Text = t
-        statusLabel.TextColor3 = color or Color3.fromRGB(190,190,205)
+local function reapplyDisplay(slot)
+    if lastApplied[slot] then
+        cleanup(slot)
+        apply(slot, lastApplied[slot], true)
     end
 end
+local function reapplyHeld(slot)
+    for tool, st in pairs(toolState) do
+        if st.slot == slot then
+            unoverlayTool(tool)
+            overlayTool(tool, slot)
+        end
+    end
+end
+local function reapply(context, slot)
+    if context == "Display" then reapplyDisplay(slot) else reapplyHeld(slot) end
+end
 
-local function buildGUI()
-    if GUI_LOADED then return end
-    GUI_LOADED = true
+-------------------------------------------------------------------------------
+-- GUI (unchanged, includes position editor)
+-------------------------------------------------------------------------------
+local statusLabel
+local editorPanel, currentContext, currentSlot = nil, "Held", "Knife"
+local rowLabels = {}
+local posStep, rotStep = 0.05, 5
+local ACTIVE_COLOR, INACTIVE_COLOR = Color3.fromRGB(95, 70, 200), Color3.fromRGB(45, 45, 60)
 
+do
     local gui = Instance.new("ScreenGui")
     gui.Name = "MM2Spawner"; gui.ResetOnSpawn = false; gui.IgnoreGuiInset = true; gui.DisplayOrder = 999999
     pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
     if not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
     SELF.gui = gui
 
+    -- Main panel (same as before)
     local root = Instance.new("Frame")
-    root.Size = UDim2.fromOffset(280, 188); root.Position = UDim2.new(0, 20, 0.5, -94)
+    root.Size = UDim2.fromOffset(280, 222); root.Position = UDim2.new(0, 20, 0.5, -111)
     root.BackgroundColor3 = Color3.fromRGB(20, 20, 27); root.BorderSizePixel = 0
     root.Active = true; root.Draggable = true; root.Parent = gui
     Instance.new("UICorner", root).CornerRadius = UDim.new(0, 10)
@@ -44705,13 +44675,21 @@ local function buildGUI()
     browseBtn.Text = "Browse all weapons (" .. #weaponList .. ")  v"; browseBtn.Parent = root
     Instance.new("UICorner", browseBtn).CornerRadius = UDim.new(0, 6)
 
+    local editBtn = Instance.new("TextButton")
+    editBtn.Size = UDim2.new(1, -24, 0, 26); editBtn.Position = UDim2.fromOffset(12, 142)
+    editBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60); editBtn.BorderSizePixel = 0
+    editBtn.Font = Enum.Font.GothamMedium; editBtn.TextSize = 13; editBtn.TextColor3 = Color3.fromRGB(220,215,235)
+    editBtn.Text = "Edit positions..."; editBtn.Parent = root
+    Instance.new("UICorner", editBtn).CornerRadius = UDim.new(0, 6)
+
     statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1, -24, 0, 34); statusLabel.Position = UDim2.fromOffset(12, 144)
+    statusLabel.Size = UDim2.new(1, -24, 0, 40); statusLabel.Position = UDim2.fromOffset(12, 176)
     statusLabel.BackgroundTransparency = 1; statusLabel.Font = Enum.Font.Gotham; statusLabel.TextSize = 12
     statusLabel.TextColor3 = Color3.fromRGB(190,190,205); statusLabel.TextXAlignment = Enum.TextXAlignment.Left
     statusLabel.TextYAlignment = Enum.TextYAlignment.Top; statusLabel.TextWrapped = true
     statusLabel.Text = "Type a name or Browse, then equip it in your MM2 inventory."; statusLabel.Parent = root
 
+    -- Browse panel (same)
     local panel = Instance.new("Frame")
     panel.Size = UDim2.fromOffset(280, 320); panel.Position = UDim2.new(0, 0, 1, 6)
     panel.BackgroundColor3 = Color3.fromRGB(20,20,27); panel.BorderSizePixel = 0; panel.Visible = false; panel.Parent = root
@@ -44732,7 +44710,6 @@ local function buildGUI()
     scroll.BorderSizePixel = 0; scroll.ScrollBarThickness = 6; scroll.ScrollBarImageColor3 = Color3.fromRGB(120,90,230)
     scroll.CanvasSize = UDim2.new(0,0,0,0); scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y; scroll.Parent = panel
     Instance.new("UICorner", scroll).CornerRadius = UDim.new(0, 6)
-
     local layout = Instance.new("UIListLayout"); layout.Padding = UDim.new(0, 2); layout.SortOrder = Enum.SortOrder.LayoutOrder; layout.Parent = scroll
     local ppad = Instance.new("UIPadding"); ppad.PaddingTop = UDim.new(0,3); ppad.PaddingBottom = UDim.new(0,3); ppad.PaddingLeft = UDim.new(0,3); ppad.PaddingRight = UDim.new(0,3); ppad.Parent = scroll
 
@@ -44745,18 +44722,11 @@ local function buildGUI()
             statusLabel.Text = "Spawned " .. key .. " (no mesh data)."
         end
     end
-
     local function spawnFromBox()
         local key = resolveInput(box.Text)
-        if not key then
-            statusLabel.TextColor3 = Color3.fromRGB(255,120,120)
-            statusLabel.Text = "Unknown: \"" .. tostring(box.Text) .. "\" — use Browse."
-            return
-        end
-        spawnWeapon(key, 1)
-        feedback(key)
+        if not key then statusLabel.TextColor3 = Color3.fromRGB(255,120,120); statusLabel.Text = "Unknown: \"" .. tostring(box.Text) .. "\" — use Browse."; return end
+        spawnWeapon(key, 1); feedback(key)
     end
-
     spawnBtn.MouseButton1Click:Connect(spawnFromBox)
     box.FocusLost:Connect(function(e) if e then spawnFromBox() end end)
 
@@ -44769,22 +44739,15 @@ local function buildGUI()
                 local btn = Instance.new("TextButton")
                 btn.Size = UDim2.new(1, -6, 0, 22)
                 btn.BackgroundColor3 = wv.type == "Knife" and Color3.fromRGB(48,44,70) or Color3.fromRGB(44,56,72)
-                btn.BackgroundTransparency = 0.25
-                btn.Font = Enum.Font.Gotham
-                btn.TextSize = 12
-                btn.TextColor3 = Color3.fromRGB(235,235,245)
-                btn.TextXAlignment = Enum.TextXAlignment.Left
-                btn.TextTruncate = Enum.TextTruncate.AtEnd
+                btn.BackgroundTransparency = 0.25; btn.Font = Enum.Font.Gotham; btn.TextSize = 12
+                btn.TextColor3 = Color3.fromRGB(235,235,245); btn.TextXAlignment = Enum.TextXAlignment.Left; btn.TextTruncate = Enum.TextTruncate.AtEnd
                 btn.Text = "  " .. wv.name .. "   -  " .. wv.rarity .. " " .. wv.type
-                btn.LayoutOrder = i
-                btn.Parent = scroll
+                btn.LayoutOrder = i; btn.Parent = scroll
                 Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
                 local key = wv.key
                 btn.MouseButton1Click:Connect(function()
-                    spawnWeapon(key, 1)
-                    feedback(key)
-                    local o = btn.BackgroundColor3
-                    btn.BackgroundColor3 = Color3.fromRGB(0,150,100)
+                    spawnWeapon(key, 1); feedback(key)
+                    local o = btn.BackgroundColor3; btn.BackgroundColor3 = Color3.fromRGB(0,150,100)
                     task.delay(0.18, function() if btn.Parent then btn.BackgroundColor3 = o end end)
                 end)
                 buttons[#buttons+1] = { btn = btn, hay = (wv.key .. " " .. wv.name):lower() }
@@ -44792,25 +44755,230 @@ local function buildGUI()
             end
         end)
     end
-
     browseBtn.MouseButton1Click:Connect(function()
         panel.Visible = not panel.Visible
         browseBtn.Text = "Browse all weapons (" .. #weaponList .. ")  " .. (panel.Visible and "^" or "v")
         if panel.Visible then buildList() end
     end)
-
     search:GetPropertyChangedSignal("Text"):Connect(function()
         local q = search.Text:lower():gsub("^%s+",""):gsub("%s+$","")
-        for _, b in ipairs(buttons) do
-            b.btn.Visible = (q == "") or (b.hay:find(q, 1, true) ~= nil)
-        end
+        for _, b in ipairs(buttons) do b.btn.Visible = (q == "") or (b.hay:find(q, 1, true) ~= nil) end
     end)
 
-    setStatus("Ready — type a weapon or browse.", Color3.fromRGB(150,230,170))
+    -- Position Editor panel (same, but with zero offsets)
+    editorPanel = Instance.new("Frame")
+    editorPanel.Size = UDim2.fromOffset(240, 400)
+    editorPanel.Position = UDim2.new(0, 312, 0.5, -111)
+    editorPanel.BackgroundColor3 = Color3.fromRGB(20, 20, 27); editorPanel.BorderSizePixel = 0
+    editorPanel.Active = true; editorPanel.Draggable = true; editorPanel.Visible = false
+    editorPanel.Parent = gui
+    Instance.new("UICorner", editorPanel).CornerRadius = UDim.new(0, 10)
+    local estk = Instance.new("UIStroke", editorPanel); estk.Color = Color3.fromRGB(120, 90, 230); estk.Thickness = 1.5
+
+    local eTitle = Instance.new("TextLabel")
+    eTitle.Size = UDim2.new(1, -40, 0, 24); eTitle.Position = UDim2.fromOffset(12, 8); eTitle.BackgroundTransparency = 1
+    eTitle.Font = Enum.Font.GothamBold; eTitle.TextSize = 15; eTitle.TextColor3 = Color3.fromRGB(235, 228, 255)
+    eTitle.TextXAlignment = Enum.TextXAlignment.Left; eTitle.Text = "Position Editor"; eTitle.Parent = editorPanel
+
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.fromOffset(22, 22); closeBtn.Position = UDim2.new(1, -30, 0, 8)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 40); closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextSize = 14; closeBtn.TextColor3 = Color3.fromRGB(255,255,255); closeBtn.Text = "X"
+    closeBtn.Parent = editorPanel
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 5)
+    closeBtn.MouseButton1Click:Connect(function() editorPanel.Visible = false; editBtn.Text = "Edit positions..." end)
+
+    local heldBtn = Instance.new("TextButton")
+    heldBtn.Size = UDim2.new(0.5, -14, 0, 26); heldBtn.Position = UDim2.fromOffset(12, 38)
+    heldBtn.Font = Enum.Font.GothamBold; heldBtn.TextSize = 12; heldBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    heldBtn.Text = "Held (round)"; heldBtn.BorderSizePixel = 0; heldBtn.Parent = editorPanel
+    Instance.new("UICorner", heldBtn).CornerRadius = UDim.new(0, 6)
+
+    local dispBtn = Instance.new("TextButton")
+    dispBtn.Size = UDim2.new(0.5, -14, 0, 26); dispBtn.Position = UDim2.new(0.5, 2, 0, 38)
+    dispBtn.Font = Enum.Font.GothamBold; dispBtn.TextSize = 12; dispBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    dispBtn.Text = "Displayed (lobby)"; dispBtn.BorderSizePixel = 0; dispBtn.Parent = editorPanel
+    Instance.new("UICorner", dispBtn).CornerRadius = UDim.new(0, 6)
+
+    local knifeBtn = Instance.new("TextButton")
+    knifeBtn.Size = UDim2.new(0.5, -14, 0, 24); knifeBtn.Position = UDim2.fromOffset(12, 70)
+    knifeBtn.Font = Enum.Font.GothamMedium; knifeBtn.TextSize = 12; knifeBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    knifeBtn.Text = "Knife"; knifeBtn.BorderSizePixel = 0; knifeBtn.Parent = editorPanel
+    Instance.new("UICorner", knifeBtn).CornerRadius = UDim.new(0, 6)
+
+    local gunBtn = Instance.new("TextButton")
+    gunBtn.Size = UDim2.new(0.5, -14, 0, 24); gunBtn.Position = UDim2.new(0.5, 2, 0, 70)
+    gunBtn.Font = Enum.Font.GothamMedium; gunBtn.TextSize = 12; gunBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    gunBtn.Text = "Gun"; gunBtn.BorderSizePixel = 0; gunBtn.Parent = editorPanel
+    Instance.new("UICorner", gunBtn).CornerRadius = UDim.new(0, 6)
+
+    local posStepBtn = Instance.new("TextButton")
+    posStepBtn.Size = UDim2.new(1, -24, 0, 24); posStepBtn.Position = UDim2.fromOffset(12, 100)
+    posStepBtn.BackgroundColor3 = Color3.fromRGB(45,45,60); posStepBtn.Font = Enum.Font.Gotham
+    posStepBtn.TextSize = 12; posStepBtn.TextColor3 = Color3.fromRGB(220,215,235)
+    posStepBtn.Text = "Pos step: 0.05"; posStepBtn.BorderSizePixel = 0; posStepBtn.Parent = editorPanel
+    Instance.new("UICorner", posStepBtn).CornerRadius = UDim.new(0, 6)
+
+    local rotStepBtn = Instance.new("TextButton")
+    rotStepBtn.Size = UDim2.new(1, -24, 0, 24); rotStepBtn.Position = UDim2.fromOffset(12, 130)
+    rotStepBtn.BackgroundColor3 = Color3.fromRGB(45,45,60); rotStepBtn.Font = Enum.Font.Gotham
+    rotStepBtn.TextSize = 12; rotStepBtn.TextColor3 = Color3.fromRGB(220,215,235)
+    rotStepBtn.Text = "Rot step: 5°"; rotStepBtn.BorderSizePixel = 0; rotStepBtn.Parent = editorPanel
+    Instance.new("UICorner", rotStepBtn).CornerRadius = UDim.new(0, 6)
+
+    local posSteps = {0.01, 0.05, 0.1, 0.5, 1}
+    local posStepIdx = 2
+    posStepBtn.MouseButton1Click:Connect(function()
+        posStepIdx = posStepIdx % #posSteps + 1
+        posStep = posSteps[posStepIdx]
+        posStepBtn.Text = "Pos step: " .. tostring(posStep)
+    end)
+    local rotSteps = {1, 5, 15, 45, 90}
+    local rotStepIdx = 2
+    rotStepBtn.MouseButton1Click:Connect(function()
+        rotStepIdx = rotStepIdx % #rotSteps + 1
+        rotStep = rotSteps[rotStepIdx]
+        rotStepBtn.Text = "Rot step: " .. tostring(rotStep) .. "°"
+    end)
+
+    local function adjustPos(axis, delta)
+        local o = Offsets[currentContext][currentSlot]
+        local p = o.pos
+        if axis == "X" then p = Vector3.new(p.X + delta, p.Y, p.Z)
+        elseif axis == "Y" then p = Vector3.new(p.X, p.Y + delta, p.Z)
+        else p = Vector3.new(p.X, p.Y, p.Z + delta) end
+        o.pos = p
+    end
+    local function adjustRot(axis, delta)
+        local o = Offsets[currentContext][currentSlot]
+        local r = o.rot
+        if axis == "X" then r = Vector3.new(r.X + delta, r.Y, r.Z)
+        elseif axis == "Y" then r = Vector3.new(r.X, r.Y + delta, r.Z)
+        else r = Vector3.new(r.X, r.Y, r.Z + delta) end
+        o.rot = r
+    end
+
+    local function refreshValues()
+        local o = Offsets[currentContext][currentSlot]
+        if rowLabels.X then rowLabels.X.Text = string.format("%.3f", o.pos.X) end
+        if rowLabels.Y then rowLabels.Y.Text = string.format("%.3f", o.pos.Y) end
+        if rowLabels.Z then rowLabels.Z.Text = string.format("%.3f", o.pos.Z) end
+        if rowLabels.RX then rowLabels.RX.Text = string.format("%.1f", o.rot.X) end
+        if rowLabels.RY then rowLabels.RY.Text = string.format("%.1f", o.rot.Y) end
+        if rowLabels.RZ then rowLabels.RZ.Text = string.format("%.1f", o.rot.Z) end
+    end
+
+    local function makeRow(parent, yOff, label, kind, axis)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, -24, 0, 26); row.Position = UDim2.fromOffset(12, yOff)
+        row.BackgroundTransparency = 1; row.Parent = parent
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.fromOffset(28, 24); lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 12; lbl.TextColor3 = Color3.fromRGB(200, 195, 220)
+        lbl.Text = label; lbl.Parent = row
+
+        local minus = Instance.new("TextButton")
+        minus.Size = UDim2.fromOffset(26, 24); minus.Position = UDim2.fromOffset(28, 0)
+        minus.BackgroundColor3 = Color3.fromRGB(60, 45, 100); minus.Font = Enum.Font.GothamBold
+        minus.TextSize = 14; minus.TextColor3 = Color3.new(1,1,1); minus.Text = "-"; minus.Parent = row
+        Instance.new("UICorner", minus).CornerRadius = UDim.new(0,5)
+
+        local val = Instance.new("TextLabel")
+        val.Size = UDim2.fromOffset(88, 24); val.Position = UDim2.fromOffset(58, 0)
+        val.BackgroundColor3 = Color3.fromRGB(30,30,40); val.Font = Enum.Font.Code
+        val.TextSize = 12; val.TextColor3 = Color3.fromRGB(230,230,240); val.Text = "0.000"; val.Parent = row
+        Instance.new("UICorner", val).CornerRadius = UDim.new(0,5)
+
+        local plus = Instance.new("TextButton")
+        plus.Size = UDim2.fromOffset(26, 24); plus.Position = UDim2.fromOffset(150, 0)
+        plus.BackgroundColor3 = Color3.fromRGB(60, 45, 100); plus.Font = Enum.Font.GothamBold
+        plus.TextSize = 14; plus.TextColor3 = Color3.new(1,1,1); plus.Text = "+"; plus.Parent = row
+        Instance.new("UICorner", plus).CornerRadius = UDim.new(0,5)
+
+        minus.MouseButton1Click:Connect(function()
+            if kind == "pos" then adjustPos(axis, -posStep) else adjustRot(axis, -rotStep) end
+            refreshValues(); reapply(currentContext, currentSlot)
+        end)
+        plus.MouseButton1Click:Connect(function()
+            if kind == "pos" then adjustPos(axis, posStep) else adjustRot(axis, rotStep) end
+            refreshValues(); reapply(currentContext, currentSlot)
+        end)
+
+        rowLabels[kind == "rot" and ("R" .. axis) or axis] = val
+    end
+
+    makeRow(editorPanel, 162, "X",  "pos", "X")
+    makeRow(editorPanel, 190, "Y",  "pos", "Y")
+    makeRow(editorPanel, 218, "Z",  "pos", "Z")
+    makeRow(editorPanel, 254, "RX", "rot", "X")
+    makeRow(editorPanel, 282, "RY", "rot", "Y")
+    makeRow(editorPanel, 310, "RZ", "rot", "Z")
+
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(0.5, -18, 0, 28); resetBtn.Position = UDim2.fromOffset(12, 346)
+    resetBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 40); resetBtn.Font = Enum.Font.GothamBold
+    resetBtn.TextSize = 12; resetBtn.TextColor3 = Color3.fromRGB(255,255,255); resetBtn.Text = "Reset"
+    resetBtn.BorderSizePixel = 0; resetBtn.Parent = editorPanel
+    Instance.new("UICorner", resetBtn).CornerRadius = UDim.new(0, 6)
+
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Size = UDim2.new(0.5, -18, 0, 28); copyBtn.Position = UDim2.new(0.5, 6, 0, 346)
+    copyBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 60); copyBtn.Font = Enum.Font.GothamBold
+    copyBtn.TextSize = 12; copyBtn.TextColor3 = Color3.fromRGB(255,255,255); copyBtn.Text = "Copy Code"
+    copyBtn.BorderSizePixel = 0; copyBtn.Parent = editorPanel
+    Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 6)
+
+    resetBtn.MouseButton1Click:Connect(function()
+        Offsets[currentContext][currentSlot] = { pos = Vector3.new(0,0,0), rot = Vector3.new(0,0,0) }
+        refreshValues(); reapply(currentContext, currentSlot)
+    end)
+
+    local function buildCodeString()
+        local o = Offsets[currentContext][currentSlot]
+        return string.format(
+            "CFrame.new(%.4f, %.4f, %.4f) * CFrame.Angles(math.rad(%.2f), math.rad(%.2f), math.rad(%.2f))",
+            o.pos.X, o.pos.Y, o.pos.Z, o.rot.X, o.rot.Y, o.rot.Z
+        )
+    end
+    copyBtn.MouseButton1Click:Connect(function()
+        local code = buildCodeString()
+        local copied = false
+        if setclipboard then pcall(function() setclipboard(code); copied = true end) end
+        print(("[MM2Viz] %s/%s offset:\n%s"):format(currentContext, currentSlot, code))
+        setStatus(copied and "Copied offset code to clipboard!" or "Offset code printed to console (F9).", Color3.fromRGB(150,230,170))
+    end)
+
+    local function setContext(ctx)
+        currentContext = ctx
+        heldBtn.BackgroundColor3 = ctx == "Held" and ACTIVE_COLOR or INACTIVE_COLOR
+        dispBtn.BackgroundColor3 = ctx == "Display" and ACTIVE_COLOR or INACTIVE_COLOR
+        refreshValues()
+    end
+    local function setSlot(slot)
+        currentSlot = slot
+        knifeBtn.BackgroundColor3 = slot == "Knife" and ACTIVE_COLOR or INACTIVE_COLOR
+        gunBtn.BackgroundColor3 = slot == "Gun" and ACTIVE_COLOR or INACTIVE_COLOR
+        refreshValues()
+    end
+    heldBtn.MouseButton1Click:Connect(function() setContext("Held") end)
+    dispBtn.MouseButton1Click:Connect(function() setContext("Display") end)
+    knifeBtn.MouseButton1Click:Connect(function() setSlot("Knife") end)
+    gunBtn.MouseButton1Click:Connect(function() setSlot("Gun") end)
+    setContext("Held"); setSlot("Knife")
+
+    editBtn.MouseButton1Click:Connect(function()
+        editorPanel.Visible = not editorPanel.Visible
+        editBtn.Text = editorPanel.Visible and "Close editor" or "Edit positions..."
+    end)
+end
+
+function setStatus(t, color)
+    if statusLabel then statusLabel.Text = t; statusLabel.TextColor3 = color or Color3.fromRGB(190,190,205) end
 end
 
 -------------------------------------------------------------------------------
--- Equip detection (poll ProfileData.Weapons.Equipped) + hooks
+-- Equip detection + hooks
 -------------------------------------------------------------------------------
 local lastEquipped = { Knife = nil, Gun = nil }
 pcall(function() lastEquipped.Knife = ProfileData.Weapons.Equipped.Knife; lastEquipped.Gun = ProfileData.Weapons.Equipped.Gun end)
@@ -44827,10 +44995,8 @@ task.spawn(function()
                 lastEquipped[slot] = eq
                 local name = eq
                 task.spawn(function() apply(slot, name) end)
-                -- also refresh any in-round tools of this slot to the new skin
-                for tool in pairs(toolState) do
-                    local ts = CollectionService:HasTag(tool, "Weapon_Gun") and "Gun" or "Knife"
-                    if ts == slot then task.spawn(function() unoverlayTool(tool); overlayTool(tool, slot) end) end
+                for tool, st in pairs(toolState) do
+                    if st.slot == slot then task.spawn(function() unoverlayTool(tool); overlayTool(tool, slot) end) end
                 end
             end
         end
@@ -44861,7 +45027,6 @@ local caConn = LocalPlayer.CharacterAdded:Connect(function(c)
 end)
 table.insert(SELF.conns, caConn)
 
--- IN-ROUND weapon tags
 for _, tag in ipairs({ "Weapon_Knife", "Weapon_Gun" }) do
     local slot = (tag == "Weapon_Gun") and "Gun" or "Knife"
     for _, t in ipairs(CollectionService:GetTagged(tag)) do
@@ -44907,6 +45072,44 @@ local function wireAll()
 end
 task.spawn(function() while _G.__MM2Viz == SELF do pcall(wireAll); task.wait(2) end end)
 
+-------------------------------------------------------------------------------
+-- Public API
+-------------------------------------------------------------------------------
+local Spawner = {}
+Spawner.__index = Spawner
+function Spawner:spawn(item, amount)
+    local key = resolveInput(item); if not key then return false, "Unknown item: " .. tostring(item) end
+    spawnWeapon(key, amount or 1); return true, key
+end
+function Spawner:equip(item)
+    local key = resolveInput(item); if not key then return false, "Unknown item: " .. tostring(item) end
+    local owned = ProfileData.Weapons.Owned
+    if not owned[key] or owned[key] <= 0 then spawnWeapon(key, 1) end
+    local ok, err = pcall(function() EquipService:EquipItem("Weapons", key) end)
+    if not ok then return false, err end
+    return true, key
+end
+function Spawner:resolve(item) return resolveInput(item) end
+function Spawner:list(filterType)
+    if not filterType then return weaponList end
+    local out = {}
+    for _, w in ipairs(weaponList) do if w.type == filterType then out[#out+1] = w end end
+    return out
+end
+function Spawner:hasMesh(item)
+    local key = resolveInput(item); return key ~= nil and MESHES[key] ~= nil
+end
+function Spawner:setOffset(context, slot, pos, rotDeg)
+    Offsets[context][slot] = { pos = pos, rot = rotDeg }
+    reapply(context, slot)
+end
+function Spawner:getOffset(context, slot)
+    local o = Offsets[context][slot]
+    return o.pos, o.rot
+end
+function Spawner:setStatus(text, color) setStatus(text, color) end
+function Spawner:destroy() SELF.destroy() end
+_G.__MM2SpawnerAPI = setmetatable({}, Spawner)
 
 SELF.destroy = function()
     for _, cn in ipairs(SELF.conns) do pcall(function() cn:Disconnect() end) end
@@ -44915,61 +45118,5 @@ SELF.destroy = function()
     if SELF.gui then pcall(function() SELF.gui:Destroy() end) end
 end
 
-setStatus(("Ready — %d weapons (%d full). Spawn + equip; works in-round too."):format(count, fullCount))	
-
-
--- ============================================================
--- API EXPOSURE
--- ============================================================
-local API = {}
-
-function API:spawn(item, amount)
-    local key = resolveInput(item)
-    if not key then return false, "Unknown item: " .. tostring(item) end
-    spawnWeapon(key, amount or 1)
-    return true, key
-end
-
-function API:equip(item)
-    local key = resolveInput(item)
-    if not key then return false, "Unknown item: " .. tostring(item) end
-    local owned = ProfileData.Weapons.Owned
-    if not owned[key] or owned[key] <= 0 then spawnWeapon(key, 1) end
-    local ok, err = pcall(function() EquipService:EquipItem("Weapons", key) end)
-    if not ok then return false, err end
-    return true, key
-end
-
-function API:resolve(item)
-    return resolveInput(item)
-end
-
-function API:list(filterType)
-    if not filterType then return weaponList end
-    local out = {}
-    for _, w in ipairs(weaponList) do
-        if w.type == filterType then out[#out+1] = w end
-    end
-    return out
-end
-
-function API:hasMesh(item)
-    local key = resolveInput(item)
-    return key ~= nil and MESHES[key] ~= nil
-end
-
-function API:setStatus(text, color)
-    setStatus(text, color)
-end
-
-function API:load()
-    buildGUI()
-    return self
-end
-
-function API:destroy()
-    SELF.destroy()
-end
-
-_G.__MM2SpawnerAPI = setmetatable({}, { __index = API })
+setStatus(("Ready — %d weapons (%d full). Chroma uses official script; offsets zeroed."):format(count, fullCount))
 return _G.__MM2SpawnerAPI
