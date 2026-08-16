@@ -44633,7 +44633,7 @@ local rowLabels = {}
 local posStep, rotStep = 0.05, 5
 local ACTIVE_COLOR, INACTIVE_COLOR = Color3.fromRGB(95, 70, 200), Color3.fromRGB(45, 45, 60)
 
-do
+--[[do
     local gui = Instance.new("ScreenGui")
     gui.Name = "MM2Spawner"; gui.ResetOnSpawn = false; gui.IgnoreGuiInset = true; gui.DisplayOrder = 999999
     pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
@@ -45036,7 +45036,7 @@ for _, tag in ipairs({ "Weapon_Knife", "Weapon_Gun" }) do
         if isMine(t) then task.spawn(function() overlayTool(t, slot) end) end
     end))
     table.insert(SELF.conns, CollectionService:GetInstanceRemovedSignal(tag):Connect(function(t) unoverlayTool(t) end))
-end
+end]]
 
 -------------------------------------------------------------------------------
 -- Fallback: wire spawned inventory tiles
